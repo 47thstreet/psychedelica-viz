@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PSYCHEDELICA // Audio Visualizer</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+    <canvas id="viz-canvas"></canvas>
+
+    <div id="ui-overlay">
+      <header id="brand">
+        <h1>PSYCHEDELICA</h1>
+        <span class="tagline">AUDIO VISUALIZER</span>
+      </header>
+
+      <div id="controls">
+        <div class="control-group">
+          <label>SOURCE</label>
+          <div class="input-row">
+            <button id="btn-upload" class="btn">Upload Audio</button>
+            <input type="file" id="file-input" accept="audio/*" hidden>
+            <button id="btn-mic" class="btn">Mic Input</button>
+          </div>
+        </div>
+
+        <div class="control-group">
+          <label>VIZ MODE</label>
+          <div class="btn-group" id="viz-modes">
+            <button class="btn active" data-mode="kaleidoscope">Kaleidoscope</button>
+            <button class="btn" data-mode="tunnel">Tunnel</button>
+            <button class="btn" data-mode="waveform-morph">Waveform</button>
+            <button class="btn" data-mode="particle-burst">Particles</button>
+            <button class="btn" data-mode="mandala">Mandala</button>
+          </div>
+        </div>
+
+        <div class="control-group">
+          <label>PALETTE</label>
+          <div class="btn-group" id="palettes">
+            <button class="btn active" data-palette="neon">Neon</button>
+            <button class="btn" data-palette="vaporwave">Vaporwave</button>
+            <button class="btn" data-palette="cosmic">Cosmic</button>
+            <button class="btn" data-palette="deep-void">Deep Void</button>
+          </div>
+        </div>
+
+        <div class="control-group">
+          <label>SENSITIVITY</label>
+          <input type="range" id="sensitivity" min="0.5" max="3" step="0.1" value="1.5">
+        </div>
+
+        <div class="control-group">
+          <label>RECORDING</label>
+          <div class="input-row">
+            <button id="btn-record" class="btn btn-record">Record</button>
+            <span id="record-status"></span>
+          </div>
+        </div>
+
+        <div id="bpm-display">
+          <span class="label">BPM</span>
+          <span id="bpm-value">--</span>
+        </div>
+
+        <div id="now-playing" class="hidden">
+          <span id="track-name"></span>
+        </div>
+      </div>
+
+      <button id="btn-toggle-ui" title="Toggle UI">&#9776;</button>
+    </div>
+  </div>
+
+  <script src="viz.js"></script>
+</body>
+</html>
