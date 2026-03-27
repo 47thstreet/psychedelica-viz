@@ -115,6 +115,23 @@ body {
   gap: 4px;
 }
 
+.btn-new {
+  border-color: rgba(46,204,113,0.4);
+  color: #2ecc71;
+}
+
+.btn-new:hover {
+  background: rgba(46,204,113,0.2);
+  border-color: #2ecc71;
+}
+
+.btn-new.active {
+  background: rgba(46,204,113,0.35);
+  border-color: #2ecc71;
+  color: #fff;
+  text-shadow: 0 0 8px rgba(46,204,113,0.8);
+}
+
 .btn-record {
   border-color: rgba(231,76,60,0.5);
   color: #e74c3c;

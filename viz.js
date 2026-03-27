@@ -7,7 +7,36 @@
     vaporwave: ['#ff71ce', '#01cdfe', '#05ffa1', '#b967ff', '#fffb96', '#f6a4ec'],
     cosmic: ['#1a0533', '#4a0e78', '#7b2fbe', '#c084fc', '#e9d5ff', '#ffffff'],
     'deep-void': ['#0d001a', '#1a0033', '#33004d', '#660066', '#990099', '#cc00cc'],
+    infrared: ['#000022', '#0000aa', '#cc0000', '#ff6600', '#ffee00', '#ffffff'],
+    bioluminescence: ['#000d1a', '#002233', '#004466', '#00ccaa', '#00ffcc', '#66ffee'],
+    'sunset-acid': ['#1a0011', '#660033', '#cc3366', '#ff6633', '#ff9900', '#ffcc00'],
+    monochrome: ['#ffffff', '#cccccc', '#999999', '#666666', '#cccccc', '#ffffff'],
   };
+
+  // ─── Perlin Noise (simplex-like 2D) ────────────────────────────────
+  const PERM = new Uint8Array(512);
+  const GRAD = [[1,1],[-1,1],[1,-1],[-1,-1],[1,0],[-1,0],[0,1],[0,-1]];
+  (function initNoise() {
+    const p = new Uint8Array(256);
+    for (let i = 0; i < 256; i++) p[i] = i;
+    for (let i = 255; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [p[i], p[j]] = [p[j], p[i]];
+    }
+    for (let i = 0; i < 512; i++) PERM[i] = p[i & 255];
+  })();
+
+  function noise2D(x, y) {
+    const X = Math.floor(x) & 255, Y = Math.floor(y) & 255;
+    const xf = x - Math.floor(x), yf = y - Math.floor(y);
+    const u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
+    const aa = PERM[PERM[X] + Y], ab = PERM[PERM[X] + Y + 1];
+    const ba = PERM[PERM[X + 1] + Y], bb = PERM[PERM[X + 1] + Y + 1];
+    const g = (h, dx, dy) => { const g2 = GRAD[h & 7]; return g2[0] * dx + g2[1] * dy; };
+    const l1 = g(aa, xf, yf) * (1 - u) + g(ba, xf - 1, yf) * u;
+    const l2 = g(ab, xf, yf - 1) * (1 - u) + g(bb, xf - 1, yf - 1) * u;
+    return l1 * (1 - v) + l2 * v;
+  }
 
   // ─── State ─────────────────────────────────────────────────────────
   const state = {
@@ -25,19 +54,47 @@
     bpm: 0,
     beatTimes: [],
     time: 0,
+    dt: 0.016,
+    lastFrame: 0,
     particles: [],
     lastBeat: 0,
     beatEnergy: 0,
     avgEnergy: 0,
+    // Post-processing
+    chromaticAberration: 0,
+    bloomIntensity: 0,
+    postFx: true,
+    // Flow field
+    flowParticles: [],
+    flowFieldInited: false,
+    // Metaballs
+    metaballs: [],
+    // Lissajous
+    lissajousTrail: [],
+    // Fractal zoom
+    fractalZoom: 1,
+    fractalOffset: { x: -0.745, y: 0.186 },
+    // Smooth freq bands
+    smoothBass: 0,
+    smoothMid: 0,
+    smoothHigh: 0,
+    smoothSubBass: 0,
   };
 
   // ─── Canvas Setup ──────────────────────────────────────────────────
   const canvas = document.getElementById('viz-canvas');
   const ctx = canvas.getContext('2d');
 
+  // Offscreen buffer for post-processing
+  const offCanvas = document.createElement('canvas');
+  const offCtx = offCanvas.getContext('2d');
+
   function resize() {
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
+    offCanvas.width = canvas.width;
+    offCanvas.height = canvas.height;
+    state.flowFieldInited = false;
   }
   window.addEventListener('resize', resize);
   resize();
@@ -48,7 +105,7 @@
     state.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     state.analyser = state.audioCtx.createAnalyser();
     state.analyser.fftSize = 2048;
-    state.analyser.smoothingTimeConstant = 0.8;
+    state.analyser.smoothingTimeConstant = 0.82;
     state.freqData = new Uint8Array(state.analyser.frequencyBinCount);
     state.timeData = new Uint8Array(state.analyser.fftSize);
   }
@@ -113,7 +170,6 @@
       }
       state.source = source;
       source.connect(state.analyser);
-      // Don't connect analyser to destination to avoid feedback
       btnMic.classList.add('active');
       trackName.textContent = 'Microphone Input';
       nowPlaying.classList.remove('hidden');
@@ -130,6 +186,10 @@
     btn.classList.add('active');
     state.mode = btn.dataset.mode;
     state.particles = [];
+    state.flowParticles = [];
+    state.flowFieldInited = false;
+    state.lissajousTrail = [];
+    state.fractalZoom = 1;
   });
 
   document.getElementById('palettes').addEventListener('click', (e) => {
@@ -148,6 +208,15 @@
     document.getElementById('ui-overlay').classList.toggle('hidden');
   });
 
+  // Post-FX toggle
+  const btnPostFx = document.getElementById('btn-postfx');
+  if (btnPostFx) {
+    btnPostFx.addEventListener('click', () => {
+      state.postFx = !state.postFx;
+      btnPostFx.classList.toggle('active', state.postFx);
+    });
+  }
+
   // ─── Recording ─────────────────────────────────────────────────────
   const btnRecord = document.getElementById('btn-record');
   const recordStatus = document.getElementById('record-status');
@@ -163,7 +232,6 @@
   function startRecording() {
     const stream = canvas.captureStream(30);
 
-    // Merge audio if available
     if (state.audioCtx && state.audioCtx.state === 'running') {
       const dest = state.audioCtx.createMediaStreamDestination();
       state.analyser.connect(dest);
@@ -209,7 +277,6 @@
 
   // ─── BPM Detection ────────────────────────────────────────────────
   function detectBPM(freqData) {
-    // Simple energy-based beat detection
     let energy = 0;
     const bassRange = Math.floor(freqData.length * 0.1);
     for (let i = 0; i < bassRange; i++) {
@@ -223,13 +290,13 @@
     const now = performance.now();
     if (energy > threshold && now - state.lastBeat > 200) {
       state.beatEnergy = 1.0;
+      state.chromaticAberration = 1.0;
+      state.bloomIntensity = 1.0;
       state.beatTimes.push(now);
       state.lastBeat = now;
 
-      // Keep last 20 beats
       if (state.beatTimes.length > 20) state.beatTimes.shift();
 
-      // Calculate BPM from intervals
       if (state.beatTimes.length > 3) {
         let totalInterval = 0;
         for (let i = 1; i < state.beatTimes.length; i++) {
@@ -244,23 +311,45 @@
     }
 
     state.beatEnergy *= 0.92;
+    state.chromaticAberration *= 0.88;
+    state.bloomIntensity *= 0.90;
     return energy;
   }
 
   // ─── Helpers ───────────────────────────────────────────────────────
+  function hexToRgb(hex) {
+    return [
+      parseInt(hex.slice(1, 3), 16),
+      parseInt(hex.slice(3, 5), 16),
+      parseInt(hex.slice(5, 7), 16),
+    ];
+  }
+
   function getColor(index, alpha = 1) {
     const colors = PALETTES[state.palette];
     const c = colors[index % colors.length];
     if (alpha === 1) return c;
-    const r = parseInt(c.slice(1, 3), 16);
-    const g = parseInt(c.slice(3, 5), 16);
-    const b = parseInt(c.slice(5, 7), 16);
+    const [r, g, b] = hexToRgb(c);
+    return `rgba(${r},${g},${b},${alpha})`;
+  }
+
+  // Interpolate between two palette colors based on t (0-1)
+  function getColorLerp(t, alpha = 1) {
+    const colors = PALETTES[state.palette];
+    const idx = t * (colors.length - 1);
+    const i = Math.floor(idx);
+    const f = idx - i;
+    const c1 = hexToRgb(colors[Math.min(i, colors.length - 1)]);
+    const c2 = hexToRgb(colors[Math.min(i + 1, colors.length - 1)]);
+    const r = Math.round(c1[0] + (c2[0] - c1[0]) * f);
+    const g = Math.round(c1[1] + (c2[1] - c1[1]) * f);
+    const b = Math.round(c1[2] + (c2[2] - c1[2]) * f);
     return `rgba(${r},${g},${b},${alpha})`;
   }
 
   function getFreqNorm(i) {
     if (!state.freqData) return 0;
-    return (state.freqData[i] / 255) * state.sensitivity;
+    return (state.freqData[Math.min(i, state.freqData.length - 1)] / 255) * state.sensitivity;
   }
 
   function getAvgFreq(start, end) {
@@ -272,15 +361,96 @@
     return (sum / (e - s) / 255) * state.sensitivity;
   }
 
-  // ─── Visualizer Modes ─────────────────────────────────────────────
+  // Smooth frequency bands with exponential smoothing
+  function updateSmoothBands() {
+    const lerp = 0.15;
+    const target_subBass = getAvgFreq(0, 0.04);
+    const target_bass = getAvgFreq(0, 0.1);
+    const target_mid = getAvgFreq(0.1, 0.5);
+    const target_high = getAvgFreq(0.5, 1.0);
+    state.smoothSubBass += (target_subBass - state.smoothSubBass) * lerp;
+    state.smoothBass += (target_bass - state.smoothBass) * lerp;
+    state.smoothMid += (target_mid - state.smoothMid) * lerp;
+    state.smoothHigh += (target_high - state.smoothHigh) * lerp;
+  }
+
+  // ─── Post-Processing Effects ───────────────────────────────────────
+
+  function applyPostProcessing() {
+    if (!state.postFx) return;
+
+    const w = canvas.width;
+    const h = canvas.height;
+
+    // Chromatic aberration on beats
+    if (state.chromaticAberration > 0.05) {
+      const offset = Math.round(state.chromaticAberration * 6);
+      if (offset > 0) {
+        const imgData = ctx.getImageData(0, 0, w, h);
+        const data = imgData.data;
+        const copy = new Uint8ClampedArray(data);
+
+        for (let y = 0; y < h; y++) {
+          for (let x = 0; x < w; x++) {
+            const idx = (y * w + x) * 4;
+            // Shift red channel left
+            const rIdx = (y * w + Math.min(x + offset, w - 1)) * 4;
+            // Shift blue channel right
+            const bIdx = (y * w + Math.max(x - offset, 0)) * 4;
+            data[idx] = copy[rIdx];       // R from shifted position
+            data[idx + 2] = copy[bIdx + 2]; // B from shifted position
+          }
+        }
+        ctx.putImageData(imgData, 0, 0);
+      }
+    }
+
+    // Bloom / glow pass
+    if (state.bloomIntensity > 0.05) {
+      offCtx.clearRect(0, 0, w, h);
+      offCtx.filter = `blur(${8 + state.bloomIntensity * 16}px) brightness(${1 + state.bloomIntensity * 0.5})`;
+      offCtx.drawImage(canvas, 0, 0);
+      offCtx.filter = 'none';
+      ctx.globalCompositeOperation = 'screen';
+      ctx.globalAlpha = state.bloomIntensity * 0.35;
+      ctx.drawImage(offCanvas, 0, 0);
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.globalAlpha = 1;
+    }
+
+    // Vignette (always on, subtle)
+    const vGrad = ctx.createRadialGradient(w / 2, h / 2, w * 0.3, w / 2, h / 2, w * 0.75);
+    vGrad.addColorStop(0, 'transparent');
+    vGrad.addColorStop(1, 'rgba(0,0,0,0.4)');
+    ctx.fillStyle = vGrad;
+    ctx.fillRect(0, 0, w, h);
+
+    // Film grain (subtle)
+    if (state.smoothBass > 0.3) {
+      const grainAlpha = 0.02 + state.smoothBass * 0.03;
+      ctx.save();
+      ctx.globalAlpha = grainAlpha;
+      const grainSize = 3;
+      for (let i = 0; i < 800; i++) {
+        const gx = Math.random() * w;
+        const gy = Math.random() * h;
+        const gv = Math.random() > 0.5 ? 255 : 0;
+        ctx.fillStyle = `rgb(${gv},${gv},${gv})`;
+        ctx.fillRect(gx, gy, grainSize, grainSize);
+      }
+      ctx.restore();
+    }
+  }
+
+  // ─── Original Visualizer Modes ─────────────────────────────────────
 
   function drawKaleidoscope() {
     const cx = canvas.width / 2;
     const cy = canvas.height / 2;
     const segments = 12;
-    const bass = getAvgFreq(0, 0.1);
-    const mid = getAvgFreq(0.1, 0.5);
-    const high = getAvgFreq(0.5, 1.0);
+    const bass = state.smoothBass;
+    const mid = state.smoothMid;
+    const high = state.smoothHigh;
     const radius = Math.min(cx, cy) * 0.8;
 
     ctx.save();
@@ -306,7 +476,6 @@
         ctx.fill();
       }
 
-      // Inner ring
       ctx.beginPath();
       for (let i = 0; i < count; i++) {
         const freq = getFreqNorm(i * 2);
@@ -331,7 +500,7 @@
     const cy = canvas.height / 2;
     const maxR = Math.max(cx, cy) * 1.2;
     const rings = 30;
-    const bass = getAvgFreq(0, 0.1);
+    const bass = state.smoothBass;
 
     ctx.save();
     ctx.translate(cx, cy);
@@ -367,12 +536,12 @@
 
   function drawWaveformMorph() {
     if (!state.timeData) return;
-    state.analyser.getByteTimeDomainData(state.timeData);
+    if (state.analyser) state.analyser.getByteTimeDomainData(state.timeData);
 
     const cx = canvas.width / 2;
     const cy = canvas.height / 2;
-    const bass = getAvgFreq(0, 0.1);
-    const mid = getAvgFreq(0.1, 0.5);
+    const bass = state.smoothBass;
+    const mid = state.smoothMid;
     const layers = 6;
 
     for (let l = 0; l < layers; l++) {
@@ -400,10 +569,9 @@
   function drawParticleBurst() {
     const cx = canvas.width / 2;
     const cy = canvas.height / 2;
-    const bass = getAvgFreq(0, 0.1);
-    const mid = getAvgFreq(0.1, 0.5);
+    const bass = state.smoothBass;
+    const mid = state.smoothMid;
 
-    // Spawn particles on beat
     if (state.beatEnergy > 0.8) {
       const count = 20 + Math.floor(bass * 40);
       for (let i = 0; i < count; i++) {
@@ -423,7 +591,6 @@
       }
     }
 
-    // Update & draw particles
     state.particles = state.particles.filter(p => p.life > 0);
     if (state.particles.length > 2000) state.particles.splice(0, state.particles.length - 2000);
 
@@ -437,7 +604,6 @@
       p.vy *= 0.99;
       p.life -= p.decay;
 
-      // Gravity toward center on bass
       const dx = cx - p.x;
       const dy = cy - p.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
@@ -446,7 +612,6 @@
         p.vy += (dy / dist) * bass * 0.3;
       }
 
-      // Draw trail
       if (p.trail.length > 1) {
         ctx.beginPath();
         ctx.moveTo(p.trail[0].x, p.trail[0].y);
@@ -456,14 +621,12 @@
         ctx.stroke();
       }
 
-      // Draw particle
       ctx.beginPath();
       ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
       ctx.fillStyle = getColor(p.color, p.life);
       ctx.fill();
     }
 
-    // Central glow
     const gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, 100 + bass * 200);
     gradient.addColorStop(0, getColor(0, 0.1 + state.beatEnergy * 0.3));
     gradient.addColorStop(1, 'transparent');
@@ -474,9 +637,9 @@
   function drawMandala() {
     const cx = canvas.width / 2;
     const cy = canvas.height / 2;
-    const bass = getAvgFreq(0, 0.1);
-    const mid = getAvgFreq(0.1, 0.5);
-    const high = getAvgFreq(0.5, 1.0);
+    const bass = state.smoothBass;
+    const mid = state.smoothMid;
+    const high = state.smoothHigh;
     const maxR = Math.min(cx, cy) * 0.85;
     const layers = 8;
 
@@ -505,7 +668,6 @@
       ctx.lineWidth = 1 + bass * 2;
       ctx.stroke();
 
-      // Dots at petal tips
       for (let p = 0; p < petals; p++) {
         const angle = (p / petals) * Math.PI * 2 + rot;
         const freq = getFreqNorm(p * 16);
@@ -521,7 +683,6 @@
       }
     }
 
-    // Center piece
     const centerR = 20 + bass * 40 + state.beatEnergy * 20;
     const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, centerR);
     gradient.addColorStop(0, getColor(0, 0.8));
@@ -535,6 +696,438 @@
     ctx.restore();
   }
 
+  // ─── NEW: Flow Field Mode ──────────────────────────────────────────
+  // Perlin noise flow field with thousands of trailing particles
+
+  function initFlowParticles() {
+    state.flowParticles = [];
+    const count = 1500;
+    for (let i = 0; i < count; i++) {
+      state.flowParticles.push({
+        x: Math.random() * canvas.width,
+        y: Math.random() * canvas.height,
+        px: 0, py: 0,
+        speed: 0.5 + Math.random() * 1.5,
+        color: Math.floor(Math.random() * 6),
+        life: Math.random(),
+      });
+    }
+    state.flowFieldInited = true;
+  }
+
+  function drawFlowField() {
+    if (!state.flowFieldInited) initFlowParticles();
+
+    const w = canvas.width;
+    const h = canvas.height;
+    const bass = state.smoothBass;
+    const mid = state.smoothMid;
+    const high = state.smoothHigh;
+
+    // Noise parameters modulated by audio
+    const noiseScale = 0.003 + bass * 0.004;
+    const noiseSpeed = state.time * (0.3 + mid * 0.5);
+    const turbulence = 1 + state.beatEnergy * 3;
+    const particleSpeed = (1.5 + bass * 3 + state.beatEnergy * 4);
+
+    for (const p of state.flowParticles) {
+      p.px = p.x;
+      p.py = p.y;
+
+      // Sample noise field for flow direction
+      const nx = p.x * noiseScale;
+      const ny = p.y * noiseScale;
+      const angle = noise2D(nx + noiseSpeed, ny + noiseSpeed * 0.7) * Math.PI * 2 * turbulence;
+
+      // Move particle along flow
+      p.x += Math.cos(angle) * p.speed * particleSpeed;
+      p.y += Math.sin(angle) * p.speed * particleSpeed;
+
+      // Wrap around edges
+      if (p.x < 0) p.x = w;
+      if (p.x > w) p.x = 0;
+      if (p.y < 0) p.y = h;
+      if (p.y > h) p.y = 0;
+
+      // Skip drawing if wrapped
+      const dx = p.x - p.px;
+      const dy = p.y - p.py;
+      if (dx * dx + dy * dy > (w * 0.25) * (w * 0.25)) continue;
+
+      // Draw line from previous to current position
+      const freqIdx = Math.floor((p.x / w) * 128);
+      const freq = getFreqNorm(freqIdx);
+      const alpha = 0.15 + freq * 0.5 + high * 0.2;
+      const lineW = 0.5 + freq * 2.5 + state.beatEnergy * 1.5;
+
+      ctx.beginPath();
+      ctx.moveTo(p.px, p.py);
+      ctx.lineTo(p.x, p.y);
+      ctx.strokeStyle = getColorLerp(
+        (noise2D(p.x * 0.001, p.y * 0.001) + 1) * 0.5,
+        alpha
+      );
+      ctx.lineWidth = lineW;
+      ctx.stroke();
+    }
+
+    // Respawn dead particles on beat
+    if (state.beatEnergy > 0.7) {
+      const respawn = Math.floor(state.flowParticles.length * 0.1);
+      for (let i = 0; i < respawn; i++) {
+        const idx = Math.floor(Math.random() * state.flowParticles.length);
+        state.flowParticles[idx].x = Math.random() * w;
+        state.flowParticles[idx].y = Math.random() * h;
+        state.flowParticles[idx].px = state.flowParticles[idx].x;
+        state.flowParticles[idx].py = state.flowParticles[idx].y;
+      }
+    }
+  }
+
+  // ─── NEW: Fractal Zoom (Mandelbrot) ────────────────────────────────
+  // Beat-synced zoom into the Mandelbrot set with audio-reactive coloring
+
+  function drawFractalZoom() {
+    const w = canvas.width;
+    const h = canvas.height;
+    const bass = state.smoothBass;
+    const mid = state.smoothMid;
+
+    // Zoom in on beat, slowly zoom out otherwise
+    state.fractalZoom *= 1 + state.beatEnergy * 0.08;
+    if (state.fractalZoom > 1e8) state.fractalZoom = 1;
+
+    const zoom = state.fractalZoom;
+    const ox = state.fractalOffset.x;
+    const oy = state.fractalOffset.y;
+
+    // Render at reduced resolution for performance
+    const scale = 4;
+    const sw = Math.floor(w / scale);
+    const sh = Math.floor(h / scale);
+    const imgData = ctx.createImageData(sw, sh);
+    const data = imgData.data;
+
+    const maxIter = 40 + Math.floor(mid * 30);
+    const aspect = sw / sh;
+
+    for (let py = 0; py < sh; py++) {
+      for (let px = 0; px < sw; px++) {
+        const x0 = ox + (px / sw - 0.5) * (3 / zoom) * aspect;
+        const y0 = oy + (py / sh - 0.5) * (3 / zoom);
+
+        let x = 0, y = 0, iter = 0;
+        while (x * x + y * y <= 4 && iter < maxIter) {
+          const xt = x * x - y * y + x0;
+          y = 2 * x * y + y0;
+          x = xt;
+          iter++;
+        }
+
+        const idx = (py * sw + px) * 4;
+        if (iter === maxIter) {
+          data[idx] = 10;
+          data[idx + 1] = 0;
+          data[idx + 2] = 26;
+        } else {
+          // Smooth coloring with audio modulation
+          const t = (iter + 1 - Math.log2(Math.log2(x * x + y * y))) / maxIter;
+          const colorShift = state.time * 0.1 + bass * 0.5;
+          const colors = PALETTES[state.palette];
+          const ci = ((t * 4 + colorShift) % 1) * (colors.length - 1);
+          const c1 = hexToRgb(colors[Math.floor(ci) % colors.length]);
+          const c2 = hexToRgb(colors[(Math.floor(ci) + 1) % colors.length]);
+          const f = ci - Math.floor(ci);
+          data[idx] = Math.round(c1[0] + (c2[0] - c1[0]) * f);
+          data[idx + 1] = Math.round(c1[1] + (c2[1] - c1[1]) * f);
+          data[idx + 2] = Math.round(c1[2] + (c2[2] - c1[2]) * f);
+        }
+        data[idx + 3] = 255;
+      }
+    }
+
+    // Draw scaled up
+    offCtx.putImageData(imgData, 0, 0);
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(offCanvas, 0, 0, sw, sh, 0, 0, w, h);
+  }
+
+  // ─── NEW: Metaball Blobs ───────────────────────────────────────────
+  // Organic metaball rendering using marching squares threshold
+
+  function drawMetaballs() {
+    const w = canvas.width;
+    const h = canvas.height;
+    const cx = w / 2;
+    const cy = h / 2;
+    const bass = state.smoothBass;
+    const mid = state.smoothMid;
+    const high = state.smoothHigh;
+
+    // Update metaball positions (audio-reactive orbits)
+    const numBalls = 8;
+    if (state.metaballs.length !== numBalls) {
+      state.metaballs = [];
+      for (let i = 0; i < numBalls; i++) {
+        state.metaballs.push({
+          x: cx, y: cy,
+          radius: 60 + Math.random() * 80,
+          phase: Math.random() * Math.PI * 2,
+          speed: 0.3 + Math.random() * 0.7,
+          orbitR: 100 + Math.random() * 200,
+        });
+      }
+    }
+
+    for (let i = 0; i < state.metaballs.length; i++) {
+      const mb = state.metaballs[i];
+      const freq = getFreqNorm(i * 32);
+      const t = state.time * mb.speed + mb.phase;
+      mb.x = cx + Math.cos(t) * mb.orbitR * (1 + bass * 0.5);
+      mb.y = cy + Math.sin(t * 1.3) * mb.orbitR * (0.8 + mid * 0.4);
+      mb.radius = 60 + freq * 100 + state.beatEnergy * 40;
+    }
+
+    // Render metaballs at reduced resolution
+    const scale = 4;
+    const sw = Math.floor(w / scale);
+    const sh = Math.floor(h / scale);
+    const imgData = ctx.createImageData(sw, sh);
+    const data = imgData.data;
+    const threshold = 1.0;
+
+    for (let py = 0; py < sh; py++) {
+      for (let px = 0; px < sw; px++) {
+        const wx = px * scale;
+        const wy = py * scale;
+
+        // Sum metaball field
+        let field = 0;
+        let dominantBall = 0;
+        let maxContrib = 0;
+        for (let i = 0; i < state.metaballs.length; i++) {
+          const mb = state.metaballs[i];
+          const dx = wx - mb.x;
+          const dy = wy - mb.y;
+          const distSq = dx * dx + dy * dy;
+          const contrib = (mb.radius * mb.radius) / (distSq + 1);
+          field += contrib;
+          if (contrib > maxContrib) {
+            maxContrib = contrib;
+            dominantBall = i;
+          }
+        }
+
+        const idx = (py * sw + px) * 4;
+        if (field > threshold) {
+          const intensity = Math.min(1, (field - threshold) * 0.5);
+          const t = (dominantBall / numBalls + state.time * 0.05) % 1;
+          const colors = PALETTES[state.palette];
+          const ci = t * (colors.length - 1);
+          const c1 = hexToRgb(colors[Math.floor(ci) % colors.length]);
+          const c2 = hexToRgb(colors[(Math.floor(ci) + 1) % colors.length]);
+          const f = ci - Math.floor(ci);
+          data[idx] = Math.round((c1[0] + (c2[0] - c1[0]) * f) * intensity);
+          data[idx + 1] = Math.round((c1[1] + (c2[1] - c1[1]) * f) * intensity);
+          data[idx + 2] = Math.round((c1[2] + (c2[2] - c1[2]) * f) * intensity);
+          data[idx + 3] = Math.round(255 * Math.min(1, intensity));
+
+          // Bright edge at threshold boundary
+          if (field < threshold + 0.3) {
+            data[idx] = Math.min(255, data[idx] + 120);
+            data[idx + 1] = Math.min(255, data[idx + 1] + 120);
+            data[idx + 2] = Math.min(255, data[idx + 2] + 120);
+            data[idx + 3] = 255;
+          }
+        } else {
+          data[idx] = 10;
+          data[idx + 1] = 0;
+          data[idx + 2] = 26;
+          data[idx + 3] = 255;
+        }
+      }
+    }
+
+    offCtx.putImageData(imgData, 0, 0);
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(offCanvas, 0, 0, sw, sh, 0, 0, w, h);
+
+    // Glow overlay for each metaball
+    for (let i = 0; i < state.metaballs.length; i++) {
+      const mb = state.metaballs[i];
+      const freq = getFreqNorm(i * 32);
+      const glowR = mb.radius * 1.5;
+      const grad = ctx.createRadialGradient(mb.x, mb.y, 0, mb.x, mb.y, glowR);
+      grad.addColorStop(0, getColor(i, 0.08 + freq * 0.12));
+      grad.addColorStop(1, 'transparent');
+      ctx.fillStyle = grad;
+      ctx.fillRect(mb.x - glowR, mb.y - glowR, glowR * 2, glowR * 2);
+    }
+  }
+
+  // ─── NEW: Sacred Geometry ──────────────────────────────────────────
+  // Flower of Life, Metatron's Cube with audio-reactive pulsing
+
+  function drawSacredGeometry() {
+    const cx = canvas.width / 2;
+    const cy = canvas.height / 2;
+    const bass = state.smoothBass;
+    const mid = state.smoothMid;
+    const high = state.smoothHigh;
+    const baseR = Math.min(cx, cy) * 0.12 * (1 + bass * 0.3);
+
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(state.time * 0.05);
+
+    // Flower of Life: concentric rings of circles
+    const rings = 3;
+    const positions = [{ x: 0, y: 0 }];
+
+    for (let ring = 1; ring <= rings; ring++) {
+      const count = ring * 6;
+      for (let i = 0; i < count; i++) {
+        const angle = (i / count) * Math.PI * 2;
+        const r = baseR * ring * 2;
+        positions.push({
+          x: Math.cos(angle) * r,
+          y: Math.sin(angle) * r,
+        });
+      }
+    }
+
+    // Draw circles with audio reactivity
+    for (let i = 0; i < positions.length; i++) {
+      const p = positions[i];
+      const freq = getFreqNorm(i * 4);
+      const breathe = Math.sin(state.time * 1.5 + i * 0.2) * 0.1;
+      const r = baseR * (1 + breathe + freq * 0.3 + state.beatEnergy * 0.2);
+
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+      ctx.strokeStyle = getColor(i % 6, 0.15 + freq * 0.5 + high * 0.2);
+      ctx.lineWidth = 0.8 + freq * 2 + state.beatEnergy * 1.5;
+      ctx.stroke();
+
+      // Inner glow on high energy
+      if (freq > 0.4) {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, r * 0.3, 0, Math.PI * 2);
+        ctx.fillStyle = getColor(i % 6, freq * 0.2);
+        ctx.fill();
+      }
+    }
+
+    // Metatron's Cube: connect centers of outer ring circles
+    ctx.globalAlpha = 0.2 + mid * 0.4;
+    const outerPositions = positions.slice(1, 7); // First ring (6 points)
+    // Connect all pairs
+    for (let i = 0; i < outerPositions.length; i++) {
+      for (let j = i + 1; j < outerPositions.length; j++) {
+        const freq = getFreqNorm((i + j) * 16);
+        ctx.beginPath();
+        ctx.moveTo(outerPositions[i].x, outerPositions[i].y);
+        ctx.lineTo(outerPositions[j].x, outerPositions[j].y);
+        ctx.strokeStyle = getColor((i + j) % 6, 0.2 + freq * 0.5);
+        ctx.lineWidth = 0.5 + freq * 1.5;
+        ctx.stroke();
+      }
+      // Connect to center
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(outerPositions[i].x, outerPositions[i].y);
+      ctx.strokeStyle = getColor(i % 6, 0.15 + state.beatEnergy * 0.4);
+      ctx.lineWidth = 0.5 + state.beatEnergy * 2;
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+
+    // Central pulsing eye
+    const eyeR = baseR * (0.5 + state.beatEnergy * 0.8 + bass * 0.4);
+    const eyeGrad = ctx.createRadialGradient(0, 0, 0, 0, 0, eyeR);
+    eyeGrad.addColorStop(0, getColor(0, 0.9));
+    eyeGrad.addColorStop(0.4, getColor(2, 0.5));
+    eyeGrad.addColorStop(1, 'transparent');
+    ctx.fillStyle = eyeGrad;
+    ctx.beginPath();
+    ctx.arc(0, 0, eyeR, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  // ─── NEW: Lissajous Orbits ─────────────────────────────────────────
+  // Parametric spirograph curves with audio-modulated ratios
+
+  function drawLissajous() {
+    const cx = canvas.width / 2;
+    const cy = canvas.height / 2;
+    const bass = state.smoothBass;
+    const mid = state.smoothMid;
+    const high = state.smoothHigh;
+    const maxR = Math.min(cx, cy) * 0.75;
+
+    const curves = 5;
+    const pointsPerCurve = 600;
+
+    ctx.save();
+    ctx.translate(cx, cy);
+
+    for (let c = 0; c < curves; c++) {
+      const freq = getFreqNorm(c * 40);
+      // Audio-reactive frequency ratios
+      const a = 3 + c + Math.floor(bass * 3);
+      const b = 2 + c + Math.floor(mid * 2);
+      const delta = state.time * (0.3 + c * 0.15) + freq * Math.PI;
+      const amplitude = maxR * (0.3 + c * 0.15) * (1 + state.beatEnergy * 0.3);
+
+      ctx.beginPath();
+      for (let i = 0; i <= pointsPerCurve; i++) {
+        const t = (i / pointsPerCurve) * Math.PI * 2;
+        const freqMod = getFreqNorm(Math.floor((i / pointsPerCurve) * 128));
+        const x = Math.sin(a * t + delta) * amplitude * (1 + freqMod * 0.2);
+        const y = Math.sin(b * t) * amplitude * (1 + freqMod * 0.15);
+        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      }
+
+      ctx.strokeStyle = getColor(c, 0.25 + freq * 0.5 + high * 0.2);
+      ctx.lineWidth = 1 + freq * 2 + state.beatEnergy * 1.5;
+      ctx.shadowColor = getColor(c);
+      ctx.shadowBlur = 5 + bass * 15;
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+    }
+
+    // Persistent trail points at curve intersections
+    const trailMax = 200;
+    if (state.beatEnergy > 0.5) {
+      const a = 3 + Math.floor(bass * 3);
+      const b = 2 + Math.floor(mid * 2);
+      const delta = state.time * 0.3;
+      const t = state.time * 2;
+      state.lissajousTrail.push({
+        x: Math.sin(a * t + delta) * maxR * 0.5,
+        y: Math.sin(b * t) * maxR * 0.5,
+        life: 1,
+        color: Math.floor(Math.random() * 6),
+      });
+    }
+
+    state.lissajousTrail = state.lissajousTrail.filter(p => p.life > 0);
+    if (state.lissajousTrail.length > trailMax) state.lissajousTrail.splice(0, state.lissajousTrail.length - trailMax);
+
+    for (const p of state.lissajousTrail) {
+      p.life -= 0.008;
+      const size = 2 + p.life * 4;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, size, 0, Math.PI * 2);
+      ctx.fillStyle = getColor(p.color, p.life * 0.6);
+      ctx.fill();
+    }
+
+    ctx.restore();
+  }
+
   // ─── Render Loop ───────────────────────────────────────────────────
   const vizRenderers = {
     kaleidoscope: drawKaleidoscope,
@@ -542,64 +1135,21 @@
     'waveform-morph': drawWaveformMorph,
     'particle-burst': drawParticleBurst,
     mandala: drawMandala,
+    'flow-field': drawFlowField,
+    'fractal-zoom': drawFractalZoom,
+    metaballs: drawMetaballs,
+    'sacred-geometry': drawSacredGeometry,
+    lissajous: drawLissajous,
   };
 
-  function render() {
-    requestAnimationFrame(render);
-    state.time += 0.016;
-
-    // Get frequency data
-    if (state.analyser) {
-      state.analyser.getByteFrequencyData(state.freqData);
-      detectBPM(state.freqData);
-    }
-
-    // Fade previous frame
-    ctx.fillStyle = state.mode === 'particle-burst'
-      ? 'rgba(10,0,26,0.15)'
-      : 'rgba(10,0,26,0.25)';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    // Draw current mode
-    const renderer = vizRenderers[state.mode];
-    if (renderer) renderer();
-  }
-
-  // ─── Demo Mode (no audio) ─────────────────────────────────────────
-  // Generate fake frequency data when no audio is connected
-  function generateDemoData() {
-    if (state.source) return;
-    if (!state.freqData) {
-      state.freqData = new Uint8Array(1024);
-      state.timeData = new Uint8Array(2048);
-    }
-    for (let i = 0; i < state.freqData.length; i++) {
-      const base = Math.sin(state.time * 2 + i * 0.05) * 40 + 60;
-      const pulse = Math.sin(state.time * 4) * 30;
-      state.freqData[i] = Math.max(0, Math.min(255, base + pulse + Math.random() * 20));
-    }
-    for (let i = 0; i < state.timeData.length; i++) {
-      state.timeData[i] = 128 + Math.sin(state.time * 6 + i * 0.02) * 40;
-    }
-    // Fake beat
-    if (Math.sin(state.time * 3) > 0.95 && performance.now() - state.lastBeat > 300) {
-      state.beatEnergy = 1.0;
-      state.lastBeat = performance.now();
-    }
-    state.beatEnergy *= 0.92;
-  }
-
-  // Patch render to include demo
-  const originalRender = render;
-  function renderWithDemo() {
-    generateDemoData();
-    originalRender();
-  }
-
-  // Override: use demo-enhanced render
-  function mainLoop() {
+  function mainLoop(timestamp) {
     requestAnimationFrame(mainLoop);
-    state.time += 0.016;
+
+    // Delta time for smooth animation regardless of frame rate
+    if (state.lastFrame === 0) state.lastFrame = timestamp;
+    state.dt = Math.min((timestamp - state.lastFrame) / 1000, 0.05); // cap at 50ms
+    state.lastFrame = timestamp;
+    state.time += state.dt;
 
     generateDemoData();
 
@@ -609,15 +1159,57 @@
       detectBPM(state.freqData);
     }
 
-    ctx.fillStyle = state.mode === 'particle-burst'
-      ? 'rgba(10,0,26,0.15)'
-      : 'rgba(10,0,26,0.25)';
+    updateSmoothBands();
+
+    // Fade previous frame (mode-specific fade rates)
+    const fadeRates = {
+      'particle-burst': 'rgba(10,0,26,0.12)',
+      'flow-field': 'rgba(10,0,26,0.04)',
+      lissajous: 'rgba(10,0,26,0.08)',
+      'sacred-geometry': 'rgba(10,0,26,0.18)',
+      'fractal-zoom': 'rgba(10,0,26,1)',
+      metaballs: 'rgba(10,0,26,1)',
+    };
+    ctx.fillStyle = fadeRates[state.mode] || 'rgba(10,0,26,0.2)';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
+    // Draw current mode
     const renderer = vizRenderers[state.mode];
     if (renderer) renderer();
+
+    // Apply post-processing
+    applyPostProcessing();
   }
 
-  // Start
-  mainLoop();
+  // ─── Demo Mode (no audio) ─────────────────────────────────────────
+  function generateDemoData() {
+    if (state.source) return;
+    if (!state.freqData) {
+      state.freqData = new Uint8Array(1024);
+      state.timeData = new Uint8Array(2048);
+    }
+    for (let i = 0; i < state.freqData.length; i++) {
+      const base = Math.sin(state.time * 2 + i * 0.05) * 40 + 60;
+      const pulse = Math.sin(state.time * 4) * 30;
+      const wobble = Math.sin(state.time * 0.7 + i * 0.02) * 20;
+      state.freqData[i] = Math.max(0, Math.min(255, base + pulse + wobble + Math.random() * 15));
+    }
+    for (let i = 0; i < state.timeData.length; i++) {
+      state.timeData[i] = 128 + Math.sin(state.time * 6 + i * 0.02) * 40;
+    }
+    // Fake beat with more variation
+    const beatPhase = Math.sin(state.time * 3);
+    if (beatPhase > 0.95 && performance.now() - state.lastBeat > 300) {
+      state.beatEnergy = 1.0;
+      state.chromaticAberration = 1.0;
+      state.bloomIntensity = 1.0;
+      state.lastBeat = performance.now();
+    }
+    state.beatEnergy *= 0.92;
+    state.chromaticAberration *= 0.88;
+    state.bloomIntensity *= 0.90;
+  }
+
+  // Start with timestamp-based loop
+  requestAnimationFrame(mainLoop);
 })();

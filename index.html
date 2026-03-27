@@ -34,6 +34,11 @@
             <button class="btn" data-mode="waveform-morph">Waveform</button>
             <button class="btn" data-mode="particle-burst">Particles</button>
             <button class="btn" data-mode="mandala">Mandala</button>
+            <button class="btn btn-new" data-mode="flow-field">Flow Field</button>
+            <button class="btn btn-new" data-mode="fractal-zoom">Fractal Zoom</button>
+            <button class="btn btn-new" data-mode="metaballs">Metaballs</button>
+            <button class="btn btn-new" data-mode="sacred-geometry">Sacred Geo</button>
+            <button class="btn btn-new" data-mode="lissajous">Lissajous</button>
           </div>
         </div>
 
@@ -44,12 +49,23 @@
             <button class="btn" data-palette="vaporwave">Vaporwave</button>
             <button class="btn" data-palette="cosmic">Cosmic</button>
             <button class="btn" data-palette="deep-void">Deep Void</button>
+            <button class="btn" data-palette="infrared">Infrared</button>
+            <button class="btn" data-palette="bioluminescence">Biolum</button>
+            <button class="btn" data-palette="sunset-acid">Sunset Acid</button>
+            <button class="btn" data-palette="monochrome">Mono</button>
           </div>
         </div>
 
         <div class="control-group">
           <label>SENSITIVITY</label>
           <input type="range" id="sensitivity" min="0.5" max="3" step="0.1" value="1.5">
+        </div>
+
+        <div class="control-group">
+          <label>POST FX</label>
+          <div class="input-row">
+            <button id="btn-postfx" class="btn active">Bloom + Aberration</button>
+          </div>
         </div>
 
         <div class="control-group">
