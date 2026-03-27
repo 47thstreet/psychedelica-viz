@@ -76,6 +76,13 @@
           </div>
         </div>
 
+        <div class="control-group">
+          <label>BATCH RENDER</label>
+          <div class="input-row">
+            <button id="btn-batch" class="btn btn-batch">Batch Render</button>
+          </div>
+        </div>
+
         <div id="bpm-display">
           <span class="label">BPM</span>
           <span id="bpm-value">--</span>
@@ -83,6 +90,60 @@
 
         <div id="now-playing" class="hidden">
           <span id="track-name"></span>
+        </div>
+      </div>
+
+      <!-- Batch Render Modal -->
+      <div id="batch-modal" class="modal hidden">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h2>BATCH RENDER</h2>
+            <button id="btn-close-batch" class="btn btn-close">&times;</button>
+          </div>
+
+          <div class="modal-body">
+            <div class="batch-section">
+              <label>PRESET PACKS</label>
+              <div class="btn-group">
+                <button class="btn btn-preset" data-preset="psytrance">Psytrance Pack</button>
+                <button class="btn btn-preset" data-preset="deep-house">Deep House Pack</button>
+                <button class="btn btn-preset" data-preset="techno">Techno Pack</button>
+              </div>
+            </div>
+
+            <div class="batch-section">
+              <label>ADD AUDIO FILES</label>
+              <div class="input-row">
+                <button id="btn-batch-add" class="btn">+ Add Files</button>
+                <input type="file" id="batch-file-input" accept="audio/*" multiple hidden>
+              </div>
+            </div>
+
+            <div class="batch-section">
+              <label>WATERMARK</label>
+              <div class="input-row">
+                <button id="btn-watermark" class="btn">Off</button>
+              </div>
+            </div>
+
+            <div id="batch-queue" class="batch-queue"></div>
+
+            <div class="batch-actions">
+              <button id="btn-render-all" class="btn btn-render-all" disabled>Render All</button>
+              <button id="btn-clear-batch" class="btn">Clear</button>
+            </div>
+
+            <div id="batch-progress" class="batch-progress hidden">
+              <div class="progress-header">
+                <span id="batch-progress-label">Rendering...</span>
+                <span id="batch-progress-count">0 / 0</span>
+              </div>
+              <div class="progress-bar-outer">
+                <div id="batch-progress-bar" class="progress-bar-inner"></div>
+              </div>
+              <div id="batch-current-item" class="batch-current-item"></div>
+            </div>
+          </div>
         </div>
       </div>
 

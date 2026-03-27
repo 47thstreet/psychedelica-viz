@@ -1210,6 +1210,507 @@
     state.bloomIntensity *= 0.90;
   }
 
+  // ─── Batch Render System ──────────────────────────────────────────
+
+  const PRESETS = {
+    psytrance: { mode: 'kaleidoscope', palette: 'cosmic', label: 'Psytrance Pack' },
+    'deep-house': { mode: 'flow-field', palette: 'vaporwave', label: 'Deep House Pack' },
+    techno: { mode: 'tunnel', palette: 'infrared', label: 'Techno Pack' },
+  };
+
+  const VIZ_MODES = [
+    'kaleidoscope', 'tunnel', 'waveform-morph', 'particle-burst',
+    'mandala', 'flow-field', 'fractal-zoom', 'metaballs',
+    'sacred-geometry', 'lissajous',
+  ];
+
+  const PALETTE_NAMES = Object.keys(PALETTES);
+
+  const batchState = {
+    queue: [],       // { id, file, mode, palette, status: 'pending'|'rendering'|'done'|'error' }
+    isRendering: false,
+    watermark: false,
+    currentIndex: -1,
+    nextId: 1,
+  };
+
+  // DOM refs
+  const batchModal = document.getElementById('batch-modal');
+  const batchQueue = document.getElementById('batch-queue');
+  const batchFileInput = document.getElementById('batch-file-input');
+  const btnRenderAll = document.getElementById('btn-render-all');
+  const batchProgress = document.getElementById('batch-progress');
+  const batchProgressBar = document.getElementById('batch-progress-bar');
+  const batchProgressLabel = document.getElementById('batch-progress-label');
+  const batchProgressCount = document.getElementById('batch-progress-count');
+  const batchCurrentItem = document.getElementById('batch-current-item');
+  const btnWatermark = document.getElementById('btn-watermark');
+
+  // Open / Close batch modal
+  document.getElementById('btn-batch').addEventListener('click', () => {
+    batchModal.classList.remove('hidden');
+  });
+
+  document.getElementById('btn-close-batch').addEventListener('click', () => {
+    if (!batchState.isRendering) {
+      batchModal.classList.add('hidden');
+    }
+  });
+
+  // Watermark toggle
+  btnWatermark.addEventListener('click', () => {
+    batchState.watermark = !batchState.watermark;
+    btnWatermark.textContent = batchState.watermark ? 'On' : 'Off';
+    btnWatermark.classList.toggle('active', batchState.watermark);
+  });
+
+  // Add files
+  document.getElementById('btn-batch-add').addEventListener('click', () => {
+    batchFileInput.click();
+  });
+
+  batchFileInput.addEventListener('change', (e) => {
+    const files = Array.from(e.target.files);
+    for (const file of files) {
+      addBatchItem(file, state.mode, state.palette);
+    }
+    batchFileInput.value = '';
+    updateBatchUI();
+  });
+
+  // Preset packs
+  document.querySelectorAll('.btn-preset').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const presetKey = btn.dataset.preset;
+      const preset = PRESETS[presetKey];
+      if (!preset) return;
+
+      // Apply preset settings to all items that don't have files yet,
+      // or prompt to add files with preset
+      document.querySelectorAll('.btn-preset').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+
+      // Update all pending items to use the preset
+      for (const item of batchState.queue) {
+        if (item.status === 'pending') {
+          item.mode = preset.mode;
+          item.palette = preset.palette;
+        }
+      }
+
+      // If queue is empty, open file picker (preset will apply to new files)
+      if (batchState.queue.length === 0) {
+        batchState._pendingPreset = preset;
+        batchFileInput.click();
+      }
+
+      updateBatchUI();
+    });
+  });
+
+  // Override file input handler to use pending preset
+  const origFileHandler = batchFileInput.onchange;
+  batchFileInput.addEventListener('change', () => {
+    if (batchState._pendingPreset) {
+      const preset = batchState._pendingPreset;
+      // Re-apply preset to newly added items (they were just added by the other handler)
+      for (const item of batchState.queue) {
+        if (item.status === 'pending') {
+          item.mode = preset.mode;
+          item.palette = preset.palette;
+        }
+      }
+      batchState._pendingPreset = null;
+      updateBatchUI();
+    }
+  });
+
+  // Clear queue
+  document.getElementById('btn-clear-batch').addEventListener('click', () => {
+    if (batchState.isRendering) return;
+    batchState.queue = [];
+    batchState.nextId = 1;
+    document.querySelectorAll('.btn-preset').forEach(b => b.classList.remove('active'));
+    updateBatchUI();
+  });
+
+  function addBatchItem(file, mode, palette) {
+    batchState.queue.push({
+      id: batchState.nextId++,
+      file,
+      mode,
+      palette,
+      status: 'pending',
+    });
+  }
+
+  function updateBatchUI() {
+    batchQueue.innerHTML = '';
+    for (const item of batchState.queue) {
+      const el = document.createElement('div');
+      el.className = 'queue-item';
+      if (item.status === 'rendering') el.classList.add('active');
+      if (item.status === 'done') el.classList.add('completed');
+
+      const nameSpan = document.createElement('span');
+      nameSpan.className = 'qi-name';
+      nameSpan.textContent = item.file.name;
+
+      const modeSelect = document.createElement('select');
+      modeSelect.disabled = item.status !== 'pending';
+      for (const m of VIZ_MODES) {
+        const opt = document.createElement('option');
+        opt.value = m;
+        opt.textContent = m.replace(/-/g, ' ');
+        if (m === item.mode) opt.selected = true;
+        modeSelect.appendChild(opt);
+      }
+      modeSelect.addEventListener('change', () => { item.mode = modeSelect.value; });
+
+      const paletteSelect = document.createElement('select');
+      paletteSelect.disabled = item.status !== 'pending';
+      for (const p of PALETTE_NAMES) {
+        const opt = document.createElement('option');
+        opt.value = p;
+        opt.textContent = p.replace(/-/g, ' ');
+        if (p === item.palette) opt.selected = true;
+        paletteSelect.appendChild(opt);
+      }
+      paletteSelect.addEventListener('change', () => { item.palette = paletteSelect.value; });
+
+      const statusSpan = document.createElement('span');
+      statusSpan.className = 'qi-status ' + item.status;
+      statusSpan.textContent = item.status === 'pending' ? 'PENDING' :
+        item.status === 'rendering' ? 'RENDERING' :
+        item.status === 'done' ? 'DONE' : 'ERROR';
+
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'qi-remove';
+      removeBtn.textContent = '\u00d7';
+      removeBtn.disabled = item.status === 'rendering';
+      removeBtn.addEventListener('click', () => {
+        if (item.status === 'rendering') return;
+        batchState.queue = batchState.queue.filter(q => q.id !== item.id);
+        updateBatchUI();
+      });
+
+      el.appendChild(nameSpan);
+      el.appendChild(modeSelect);
+      el.appendChild(paletteSelect);
+      el.appendChild(statusSpan);
+      el.appendChild(removeBtn);
+      batchQueue.appendChild(el);
+    }
+
+    const hasPending = batchState.queue.some(q => q.status === 'pending');
+    btnRenderAll.disabled = !hasPending || batchState.isRendering;
+  }
+
+  // ─── Watermark Drawing ──────────────────────────────────────────
+
+  function drawWatermark(targetCtx, w, h) {
+    targetCtx.save();
+    targetCtx.font = '14px "Courier New", monospace';
+    targetCtx.letterSpacing = '4px';
+    const text = 'PSYCHEDELICA';
+    const metrics = targetCtx.measureText(text);
+    const textW = metrics.width + 48; // extra for letter-spacing
+    const textH = 20;
+    const padding = 12;
+    const x = w - textW - padding;
+    const y = h - textH - padding;
+
+    // Background
+    targetCtx.fillStyle = 'rgba(10,0,26,0.6)';
+    targetCtx.fillRect(x - 8, y - 14, textW + 16, textH + 12);
+
+    // Border
+    targetCtx.strokeStyle = 'rgba(155,89,182,0.4)';
+    targetCtx.lineWidth = 1;
+    targetCtx.strokeRect(x - 8, y - 14, textW + 16, textH + 12);
+
+    // Text
+    targetCtx.fillStyle = 'rgba(155,89,182,0.7)';
+    targetCtx.textBaseline = 'top';
+    targetCtx.fillText(text, x, y - 8);
+
+    targetCtx.restore();
+  }
+
+  // ─── Batch Render Engine ──────────────────────────────────────────
+
+  btnRenderAll.addEventListener('click', () => {
+    if (batchState.isRendering) return;
+    startBatchRender();
+  });
+
+  async function startBatchRender() {
+    batchState.isRendering = true;
+    batchProgress.classList.remove('hidden');
+    btnRenderAll.disabled = true;
+
+    const pending = batchState.queue.filter(q => q.status === 'pending');
+    const total = pending.length;
+
+    for (let i = 0; i < pending.length; i++) {
+      const item = pending[i];
+      batchState.currentIndex = i;
+      item.status = 'rendering';
+      batchProgressLabel.textContent = 'Rendering...';
+      batchProgressCount.textContent = `${i + 1} / ${total}`;
+      batchCurrentItem.textContent = item.file.name + ' [' + item.mode + ' + ' + item.palette + ']';
+      batchProgressBar.style.width = ((i / total) * 100) + '%';
+      updateBatchUI();
+
+      try {
+        await renderSingleItem(item);
+        item.status = 'done';
+      } catch (err) {
+        console.error('Batch render error:', err);
+        item.status = 'error';
+      }
+
+      batchProgressBar.style.width = (((i + 1) / total) * 100) + '%';
+      updateBatchUI();
+    }
+
+    batchState.isRendering = false;
+    batchState.currentIndex = -1;
+    batchProgressLabel.textContent = 'Complete!';
+    batchCurrentItem.textContent = '';
+    btnRenderAll.disabled = !batchState.queue.some(q => q.status === 'pending');
+  }
+
+  async function renderSingleItem(item) {
+    // Decode the audio file
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const arrayBuffer = await item.file.arrayBuffer();
+    const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+
+    // Create an offscreen canvas for rendering
+    const renderW = 1280;
+    const renderH = 720;
+    const renderCanvas = document.createElement('canvas');
+    renderCanvas.width = renderW;
+    renderCanvas.height = renderH;
+    const renderCtx = renderCanvas.getContext('2d');
+
+    // Offscreen for post-fx
+    const renderOffCanvas = document.createElement('canvas');
+    renderOffCanvas.width = renderW;
+    renderOffCanvas.height = renderH;
+    const renderOffCtx = renderOffCanvas.getContext('2d');
+
+    // Set up MediaRecorder on the render canvas
+    const stream = renderCanvas.captureStream(30);
+    const recorder = new MediaRecorder(stream, {
+      mimeType: 'video/webm;codecs=vp9',
+      videoBitsPerSecond: 5000000,
+    });
+    const chunks = [];
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) chunks.push(e.data);
+    };
+
+    const done = new Promise((resolve, reject) => {
+      recorder.onstop = () => {
+        const blob = new Blob(chunks, { type: 'video/webm' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        const safeName = item.file.name.replace(/\.[^.]+$/, '');
+        a.download = `psychedelica-${safeName}-${item.mode}.webm`;
+        a.click();
+        URL.revokeObjectURL(url);
+        resolve();
+      };
+      recorder.onerror = reject;
+    });
+
+    recorder.start(100);
+
+    // Offline audio analysis: extract frequency data per frame
+    const fps = 30;
+    const duration = audioBuffer.duration;
+    const totalFrames = Math.ceil(duration * fps);
+    const fftSize = 2048;
+    const channelData = audioBuffer.getChannelData(0);
+    const sampleRate = audioBuffer.sampleRate;
+
+    // Create a temporary render state
+    const rs = {
+      mode: item.mode,
+      palette: item.palette,
+      sensitivity: 1.5,
+      freqData: new Uint8Array(fftSize / 2),
+      timeData: new Uint8Array(fftSize),
+      time: 0,
+      dt: 1 / fps,
+      beatEnergy: 0,
+      chromaticAberration: 0,
+      bloomIntensity: 0,
+      smoothBass: 0,
+      smoothMid: 0,
+      smoothHigh: 0,
+      smoothSubBass: 0,
+      lastBeat: 0,
+      avgEnergy: 0,
+      beatTimes: [],
+      particles: [],
+      flowParticles: [],
+      flowFieldInited: false,
+      metaballs: [],
+      lissajousTrail: [],
+      fractalZoom: 1,
+      fractalOffset: { x: -0.745, y: 0.186 },
+      postFx: true,
+    };
+
+    // Simple FFT approximation from raw samples
+    function analyzeFrame(frameIdx) {
+      const samplesPerFrame = Math.floor(sampleRate / fps);
+      const startSample = frameIdx * samplesPerFrame;
+      const endSample = Math.min(startSample + fftSize, channelData.length);
+
+      // Fill time data
+      for (let i = 0; i < fftSize; i++) {
+        const si = startSample + i;
+        if (si < channelData.length) {
+          rs.timeData[i] = Math.round((channelData[si] + 1) * 128);
+        } else {
+          rs.timeData[i] = 128;
+        }
+      }
+
+      // Simple spectral approximation using windowed energy bands
+      const bucketSize = Math.floor(fftSize / (fftSize / 2));
+      for (let b = 0; b < fftSize / 2; b++) {
+        let sum = 0;
+        const s = startSample + b * bucketSize;
+        for (let j = 0; j < bucketSize && s + j < channelData.length; j++) {
+          sum += Math.abs(channelData[s + j]);
+        }
+        const avg = sum / bucketSize;
+        // Map to frequency-like curve (bass louder, treble quieter)
+        const freqWeight = 1 - (b / (fftSize / 2)) * 0.6;
+        rs.freqData[b] = Math.min(255, Math.round(avg * 255 * 3 * freqWeight * rs.sensitivity));
+      }
+    }
+
+    // Swap render state into main state temporarily
+    const savedState = {};
+    const keysToSwap = [
+      'mode', 'palette', 'sensitivity', 'freqData', 'timeData', 'time', 'dt',
+      'beatEnergy', 'chromaticAberration', 'bloomIntensity', 'smoothBass',
+      'smoothMid', 'smoothHigh', 'smoothSubBass', 'lastBeat', 'avgEnergy',
+      'beatTimes', 'particles', 'flowParticles', 'flowFieldInited',
+      'metaballs', 'lissajousTrail', 'fractalZoom', 'fractalOffset', 'postFx',
+    ];
+
+    function swapIn() {
+      for (const k of keysToSwap) {
+        savedState[k] = state[k];
+        state[k] = rs[k];
+      }
+    }
+
+    function swapOut() {
+      for (const k of keysToSwap) {
+        rs[k] = state[k];
+        state[k] = savedState[k];
+      }
+    }
+
+    // Save original canvas refs and swap to render canvas
+    const origCanvas = canvas;
+    const origCtx = ctx;
+    const origOffCanvas = offCanvas;
+    const origOffCtx = offCtx;
+
+    // Render each frame
+    const maxFrames = Math.min(totalFrames, duration * fps);
+    const frameBatch = 5; // Process 5 frames per tick to avoid blocking too long
+
+    await new Promise((resolveRender) => {
+      let frameIdx = 0;
+
+      function renderBatch() {
+        swapIn();
+
+        // Temporarily override canvas references (they're const, so we override via the draw functions)
+        // Instead, we directly render using the shared ctx variable by reassigning
+        // We need to use the render canvas directly
+        const batchEnd = Math.min(frameIdx + frameBatch, maxFrames);
+
+        for (; frameIdx < batchEnd; frameIdx++) {
+          rs.time = frameIdx / fps;
+          state.time = rs.time;
+          state.dt = 1 / fps;
+
+          analyzeFrame(frameIdx);
+          state.freqData = rs.freqData;
+          state.timeData = rs.timeData;
+
+          // BPM / beat detection
+          detectBPM(state.freqData);
+          updateSmoothBands();
+
+          // Clear frame
+          const fadeRates = {
+            'particle-burst': 'rgba(10,0,26,0.12)',
+            'flow-field': 'rgba(10,0,26,0.04)',
+            lissajous: 'rgba(10,0,26,0.08)',
+            'sacred-geometry': 'rgba(10,0,26,0.18)',
+            'fractal-zoom': 'rgba(10,0,26,1)',
+            metaballs: 'rgba(10,0,26,1)',
+          };
+
+          // Scale render: draw to offscreen then copy
+          renderCtx.fillStyle = fadeRates[state.mode] || 'rgba(10,0,26,0.2)';
+          renderCtx.fillRect(0, 0, renderW, renderH);
+
+          // We need to temporarily make the global ctx/canvas point to render canvas
+          // This is the simplest approach: draw to main canvas, then copy
+          ctx.fillStyle = fadeRates[state.mode] || 'rgba(10,0,26,0.2)';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+          const renderer = vizRenderers[state.mode];
+          if (renderer) renderer();
+          applyPostProcessing();
+
+          // Copy main canvas to render canvas (scaled)
+          renderCtx.drawImage(origCanvas, 0, 0, origCanvas.width, origCanvas.height, 0, 0, renderW, renderH);
+
+          // Draw watermark if enabled
+          if (batchState.watermark) {
+            drawWatermark(renderCtx, renderW, renderH);
+          }
+        }
+
+        swapOut();
+
+        // Update progress within this item
+        const itemPct = frameIdx / maxFrames;
+        const overallIdx = batchState.currentIndex;
+        const totalItems = batchState.queue.filter(q => q.status !== 'pending' || q === batchState.queue.find(qq => qq.status === 'rendering')).length;
+
+        batchCurrentItem.textContent = item.file.name + ' [' + item.mode + ' + ' + item.palette + '] ' + Math.round(itemPct * 100) + '%';
+
+        if (frameIdx < maxFrames) {
+          setTimeout(renderBatch, 0);
+        } else {
+          recorder.stop();
+          resolveRender();
+        }
+      }
+
+      renderBatch();
+    });
+
+    await done;
+    await audioCtx.close();
+  }
+
   // Start with timestamp-based loop
   requestAnimationFrame(mainLoop);
 })();
