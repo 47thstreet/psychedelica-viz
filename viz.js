@@ -119,11 +119,78 @@
     state.analyser.connect(state.audioCtx.destination);
   }
 
-  // ─── File Upload ───────────────────────────────────────────────────
+  // ─── File Upload & Playback ─────────────────────────────────────────
   const fileInput = document.getElementById('file-input');
   const btnUpload = document.getElementById('btn-upload');
   const nowPlaying = document.getElementById('now-playing');
   const trackName = document.getElementById('track-name');
+  const playbackControls = document.getElementById('playback-controls');
+  const btnPlay = document.getElementById('btn-play');
+  const btnStop = document.getElementById('btn-stop');
+  const playbackTime = document.getElementById('playback-time');
+
+  let currentAudioBuffer = null;
+  let isPlaying = false;
+  let playbackOffset = 0;
+  let playbackStartedAt = 0;
+
+  function formatTime(sec) {
+    const m = Math.floor(sec / 60);
+    const s = Math.floor(sec % 60);
+    return m + ':' + (s < 10 ? '0' : '') + s;
+  }
+
+  function startPlayback(offset) {
+    if (!currentAudioBuffer) return;
+    initAudio();
+    if (state.audioCtx.state === 'suspended') state.audioCtx.resume();
+
+    // Stop existing source if any
+    if (state.source) {
+      try { state.source.disconnect(); state.source.stop(); } catch (_) { /* noop */ }
+    }
+
+    const source = state.audioCtx.createBufferSource();
+    source.buffer = currentAudioBuffer;
+    source.loop = true;
+    connectSource(source);
+    source.start(0, offset);
+
+    playbackStartedAt = state.audioCtx.currentTime - offset;
+    isPlaying = true;
+    btnPlay.textContent = 'Pause';
+    btnPlay.classList.add('playing');
+  }
+
+  function pausePlayback() {
+    if (!isPlaying) return;
+    playbackOffset = (state.audioCtx.currentTime - playbackStartedAt) % currentAudioBuffer.duration;
+    if (state.source) {
+      try { state.source.disconnect(); state.source.stop(); } catch (_) { /* noop */ }
+      state.source = null;
+    }
+    isPlaying = false;
+    btnPlay.textContent = 'Play';
+    btnPlay.classList.remove('playing');
+    updateBpmVisibility();
+  }
+
+  function stopPlayback() {
+    pausePlayback();
+    playbackOffset = 0;
+  }
+
+  function updatePlaybackTime() {
+    if (!currentAudioBuffer) return;
+    const dur = currentAudioBuffer.duration;
+    let cur = 0;
+    if (isPlaying && state.audioCtx) {
+      cur = (state.audioCtx.currentTime - playbackStartedAt) % dur;
+    } else {
+      cur = playbackOffset;
+    }
+    playbackTime.textContent = formatTime(cur) + ' / ' + formatTime(dur);
+  }
 
   btnUpload.addEventListener('click', () => fileInput.click());
 
@@ -133,16 +200,32 @@
     initAudio();
     if (state.audioCtx.state === 'suspended') await state.audioCtx.resume();
 
+    // Stop any existing playback
+    stopPlayback();
+
     const arrayBuffer = await file.arrayBuffer();
-    const audioBuffer = await state.audioCtx.decodeAudioData(arrayBuffer);
-    const source = state.audioCtx.createBufferSource();
-    source.buffer = audioBuffer;
-    source.loop = true;
-    connectSource(source);
-    source.start(0);
+    currentAudioBuffer = await state.audioCtx.decodeAudioData(arrayBuffer);
 
     trackName.textContent = file.name;
     nowPlaying.classList.remove('hidden');
+    playbackControls.classList.remove('hidden');
+
+    // Auto-play on upload
+    startPlayback(0);
+    updateBpmVisibility();
+  });
+
+  btnPlay.addEventListener('click', () => {
+    if (!currentAudioBuffer) return;
+    if (isPlaying) {
+      pausePlayback();
+    } else {
+      startPlayback(playbackOffset);
+    }
+  });
+
+  btnStop.addEventListener('click', () => {
+    stopPlayback();
     updateBpmVisibility();
   });
 
@@ -1212,6 +1295,7 @@
 
     updateSmoothBands();
     updateBandDisplay();
+    updatePlaybackTime();
 
     // Fade previous frame (mode-specific fade rates)
     const fadeRates = {

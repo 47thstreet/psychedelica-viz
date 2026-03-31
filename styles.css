@@ -167,6 +167,29 @@ input[type="range"]::-webkit-slider-thumb {
   box-shadow: 0 0 8px rgba(155,89,182,0.5);
 }
 
+/* Playback controls */
+#playback-controls.hidden {
+  display: none;
+}
+
+.btn-playback {
+  min-width: 48px;
+  text-align: center;
+}
+
+.btn-playback.playing {
+  background: rgba(46,204,113,0.3);
+  border-color: #2ecc71;
+  color: #2ecc71;
+}
+
+.playback-time {
+  font-size: 10px;
+  color: rgba(155,89,182,0.5);
+  align-self: center;
+  letter-spacing: 1px;
+}
+
 /* Frequency bands */
 #freq-bands {
   display: flex;
