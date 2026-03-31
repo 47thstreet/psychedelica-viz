@@ -351,6 +351,184 @@
     updateBpmVisibility();
   });
 
+  // ─── AI Vibe Engine ────────────────────────────────────────────────
+  // Analyzes audio characteristics in real-time and picks the best
+  // viz mode + palette to match the music's vibe.
+
+  const btnAi = document.getElementById('btn-ai');
+  const aiVibeLabel = document.getElementById('ai-vibe-label');
+  let aiActive = false;
+  let aiLastSwitch = 0;
+  let aiSmoothedCentroid = 0;
+  let aiSmoothedEnergy = 0;
+  let aiSmoothedFlatness = 0;
+  let aiCurrentVibe = '';
+
+  // Vibe definitions: each maps audio traits → mode + palette
+  const VIBES = [
+    { name: 'DEEP & HEAVY',    mode: 'tunnel',          palette: 'deep-void',        minBass: 0.55, maxCentroid: 0.3, maxFlatness: 0.5 },
+    { name: 'DARK PULSE',      mode: 'metaballs',       palette: 'infrared',         minBass: 0.45, maxCentroid: 0.35, maxFlatness: 0.4 },
+    { name: 'HYPNOTIC',        mode: 'sacred-geometry', palette: 'cosmic',           minBass: 0.3,  maxCentroid: 0.45, maxFlatness: 0.6 },
+    { name: 'DREAMY',          mode: 'flow-field',      palette: 'bioluminescence',  minBass: 0.0,  maxCentroid: 0.5,  maxFlatness: 0.7 },
+    { name: 'EUPHORIC',        mode: 'kaleidoscope',    palette: 'neon',             minBass: 0.35, maxCentroid: 0.55, maxFlatness: 1.0 },
+    { name: 'MELANCHOLIC',     mode: 'lissajous',       palette: 'vaporwave',        minBass: 0.0,  maxCentroid: 0.45, maxFlatness: 0.5 },
+    { name: 'AGGRESSIVE',      mode: 'particle-burst',  palette: 'infrared',         minBass: 0.5,  maxCentroid: 0.6,  maxFlatness: 0.8 },
+    { name: 'TRANSCENDENT',    mode: 'mandala',         palette: 'cosmic',           minBass: 0.2,  maxCentroid: 0.4,  maxFlatness: 0.6 },
+    { name: 'PSYCHEDELIC',     mode: 'fractal-zoom',    palette: 'sunset-acid',      minBass: 0.3,  maxCentroid: 0.5,  maxFlatness: 0.7 },
+    { name: 'MINIMAL',         mode: 'waveform-morph',  palette: 'monochrome',       minBass: 0.0,  maxCentroid: 0.0,  maxFlatness: 0.3 },
+  ];
+
+  function computeSpectralCentroid() {
+    if (!state.freqData) return 0;
+    let weightedSum = 0, total = 0;
+    for (let i = 0; i < state.freqData.length; i++) {
+      weightedSum += i * state.freqData[i];
+      total += state.freqData[i];
+    }
+    return total > 0 ? (weightedSum / total) / state.freqData.length : 0;
+  }
+
+  function computeSpectralFlatness() {
+    if (!state.freqData) return 0;
+    let logSum = 0, linSum = 0, count = 0;
+    for (let i = 1; i < state.freqData.length; i++) {
+      const v = Math.max(state.freqData[i], 1);
+      logSum += Math.log(v);
+      linSum += v;
+      count++;
+    }
+    if (count === 0 || linSum === 0) return 0;
+    return Math.exp(logSum / count) / (linSum / count);
+  }
+
+  function computeOverallEnergy() {
+    if (!state.freqData) return 0;
+    let sum = 0;
+    for (let i = 0; i < state.freqData.length; i++) sum += state.freqData[i];
+    return (sum / state.freqData.length) / 255;
+  }
+
+  function classifyVibe() {
+    const bass = state.smoothBass;
+    const centroid = aiSmoothedCentroid;
+    const flatness = aiSmoothedFlatness;
+    const energy = aiSmoothedEnergy;
+
+    let bestVibe = VIBES[0];
+    let bestScore = -Infinity;
+
+    for (const vibe of VIBES) {
+      let score = 0;
+
+      // Bass match: reward being above minimum
+      if (bass >= vibe.minBass) {
+        score += 2 + (bass - vibe.minBass) * 3;
+      } else {
+        score -= (vibe.minBass - bass) * 8;
+      }
+
+      // Centroid match: reward being below max (closeness)
+      const centroidDist = Math.abs(centroid - vibe.maxCentroid);
+      score -= centroidDist * 5;
+
+      // Flatness match
+      const flatDist = Math.abs(flatness - vibe.maxFlatness);
+      score -= flatDist * 4;
+
+      // Energy bonus for high-energy vibes
+      if (vibe.name === 'AGGRESSIVE' || vibe.name === 'EUPHORIC') {
+        score += energy * 3;
+      }
+      // Low energy bonus for calm vibes
+      if (vibe.name === 'DREAMY' || vibe.name === 'MELANCHOLIC' || vibe.name === 'MINIMAL') {
+        score += (1 - energy) * 3;
+      }
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestVibe = vibe;
+      }
+    }
+
+    return bestVibe;
+  }
+
+  function applyVibe(vibe) {
+    if (vibe.name === aiCurrentVibe) return;
+    aiCurrentVibe = vibe.name;
+
+    // Switch mode
+    state.mode = vibe.mode;
+    state.particles = [];
+    state.flowParticles = [];
+    state.flowFieldInited = false;
+    state.lissajousTrail = [];
+    state.fractalZoom = 1;
+
+    // Update mode buttons
+    document.querySelectorAll('#viz-modes .btn').forEach(b => {
+      b.classList.toggle('active', b.dataset.mode === vibe.mode);
+    });
+
+    // Switch palette
+    state.palette = vibe.palette;
+    document.querySelectorAll('#palettes .btn').forEach(b => {
+      b.classList.toggle('active', b.dataset.palette === vibe.palette);
+    });
+
+    // Show vibe name
+    aiVibeLabel.textContent = vibe.name;
+    aiVibeLabel.style.opacity = '1';
+  }
+
+  function updateAiVibe() {
+    if (!aiActive) return;
+
+    // Smooth the spectral features
+    const lerp = 0.08;
+    aiSmoothedCentroid += (computeSpectralCentroid() - aiSmoothedCentroid) * lerp;
+    aiSmoothedEnergy += (computeOverallEnergy() - aiSmoothedEnergy) * lerp;
+    aiSmoothedFlatness += (computeSpectralFlatness() - aiSmoothedFlatness) * lerp;
+
+    // Only switch every 3 seconds to avoid flickering
+    const now = performance.now();
+    if (now - aiLastSwitch < 3000) return;
+
+    const vibe = classifyVibe();
+    if (vibe.name !== aiCurrentVibe) {
+      aiLastSwitch = now;
+      applyVibe(vibe);
+    }
+  }
+
+  btnAi.addEventListener('click', () => {
+    aiActive = !aiActive;
+    btnAi.classList.toggle('active', aiActive);
+    if (aiActive) {
+      aiLastSwitch = 0;
+      aiCurrentVibe = '';
+      aiVibeLabel.textContent = 'analyzing...';
+    } else {
+      aiVibeLabel.textContent = '';
+    }
+  });
+
+  // Turn off AI mode if user manually picks a mode or palette
+  document.getElementById('viz-modes').addEventListener('click', () => {
+    if (aiActive) {
+      aiActive = false;
+      btnAi.classList.remove('active');
+      aiVibeLabel.textContent = '';
+    }
+  });
+  document.getElementById('palettes').addEventListener('click', () => {
+    if (aiActive) {
+      aiActive = false;
+      btnAi.classList.remove('active');
+      aiVibeLabel.textContent = '';
+    }
+  });
+
   // ─── Recording ─────────────────────────────────────────────────────
   const btnRecord = document.getElementById('btn-record');
   const recordStatus = document.getElementById('record-status');
@@ -1296,6 +1474,7 @@
     updateSmoothBands();
     updateBandDisplay();
     updatePlaybackTime();
+    updateAiVibe();
 
     // Fade previous frame (mode-specific fade rates)
     const fadeRates = {
