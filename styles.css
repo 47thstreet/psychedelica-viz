@@ -167,6 +167,62 @@ input[type="range"]::-webkit-slider-thumb {
   box-shadow: 0 0 8px rgba(155,89,182,0.5);
 }
 
+/* Frequency bands */
+#freq-bands {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.freq-band {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.freq-label {
+  font-size: 9px;
+  letter-spacing: 2px;
+  color: rgba(155,89,182,0.6);
+  width: 32px;
+  flex-shrink: 0;
+}
+
+.freq-bar-outer {
+  flex: 1;
+  height: 6px;
+  background: rgba(155,89,182,0.12);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.freq-bar-inner {
+  height: 100%;
+  width: 0%;
+  border-radius: 3px;
+  transition: width 0.08s linear;
+}
+
+#band-bass {
+  background: linear-gradient(90deg, #9b59b6, #e74c3c);
+}
+
+#band-mid {
+  background: linear-gradient(90deg, #3498db, #2ecc71);
+}
+
+#band-high {
+  background: linear-gradient(90deg, #f39c12, #ffff00);
+}
+
+.freq-val {
+  font-size: 9px;
+  color: rgba(155,89,182,0.5);
+  width: 24px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
 #bpm-display {
   display: flex;
   align-items: center;
@@ -184,6 +240,48 @@ input[type="range"]::-webkit-slider-thumb {
   font-size: 24px;
   color: #9b59b6;
   text-shadow: 0 0 10px rgba(155,89,182,0.5);
+}
+
+#bpm-input {
+  width: 64px;
+  background: rgba(10,0,26,0.9);
+  border: 1px solid rgba(155,89,182,0.3);
+  color: #9b59b6;
+  font-family: 'Courier New', monospace;
+  font-size: 14px;
+  padding: 4px 6px;
+  text-align: center;
+  outline: none;
+}
+
+#bpm-input:focus {
+  border-color: #9b59b6;
+  box-shadow: 0 0 8px rgba(155,89,182,0.3);
+}
+
+#bpm-input::placeholder {
+  color: rgba(155,89,182,0.3);
+}
+
+/* Hide BPM input when audio source is active */
+#bpm-input.hidden {
+  display: none;
+}
+
+/* Hide detected BPM value when manually inputting */
+#bpm-value.hidden {
+  display: none;
+}
+
+/* Hide spinner arrows on number input */
+#bpm-input::-webkit-outer-spin-button,
+#bpm-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+#bpm-input[type=number] {
+  -moz-appearance: textfield;
 }
 
 #record-status {

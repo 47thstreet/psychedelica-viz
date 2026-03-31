@@ -84,9 +84,31 @@
           </div>
         </div>
 
+        <div class="control-group">
+          <label>FREQUENCY BANDS</label>
+          <div id="freq-bands">
+            <div class="freq-band">
+              <span class="freq-label">BASS</span>
+              <div class="freq-bar-outer"><div class="freq-bar-inner" id="band-bass"></div></div>
+              <span class="freq-val" id="band-bass-val">0</span>
+            </div>
+            <div class="freq-band">
+              <span class="freq-label">MID</span>
+              <div class="freq-bar-outer"><div class="freq-bar-inner" id="band-mid"></div></div>
+              <span class="freq-val" id="band-mid-val">0</span>
+            </div>
+            <div class="freq-band">
+              <span class="freq-label">HIGH</span>
+              <div class="freq-bar-outer"><div class="freq-bar-inner" id="band-high"></div></div>
+              <span class="freq-val" id="band-high-val">0</span>
+            </div>
+          </div>
+        </div>
+
         <div id="bpm-display">
           <span class="label">BPM</span>
           <span id="bpm-value">--</span>
+          <input type="number" id="bpm-input" min="40" max="300" step="1" placeholder="BPM" title="Set BPM manually">
         </div>
 
         <div id="now-playing" class="hidden">

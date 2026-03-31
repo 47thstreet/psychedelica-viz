@@ -143,6 +143,7 @@
 
     trackName.textContent = file.name;
     nowPlaying.classList.remove('hidden');
+    updateBpmVisibility();
   });
 
   // ─── Mic Input ─────────────────────────────────────────────────────
@@ -159,6 +160,11 @@
       btnMic.classList.remove('active');
       trackName.textContent = '';
       nowPlaying.classList.add('hidden');
+      if (state.source) {
+        try { state.source.disconnect(); } catch (_) { /* noop */ }
+        state.source = null;
+      }
+      updateBpmVisibility();
       return;
     }
 
@@ -173,6 +179,7 @@
       btnMic.classList.add('active');
       trackName.textContent = 'Microphone Input';
       nowPlaying.classList.remove('hidden');
+      updateBpmVisibility();
     } catch (err) {
       console.error('Mic access denied:', err);
     }
@@ -216,6 +223,50 @@
       btnPostFx.classList.toggle('active', state.postFx);
     });
   }
+
+  // ─── Frequency Band Display ────────────────────────────────────────
+  const bandBassBar = document.getElementById('band-bass');
+  const bandMidBar = document.getElementById('band-mid');
+  const bandHighBar = document.getElementById('band-high');
+  const bandBassVal = document.getElementById('band-bass-val');
+  const bandMidVal = document.getElementById('band-mid-val');
+  const bandHighVal = document.getElementById('band-high-val');
+
+  function updateBandDisplay() {
+    const bass = Math.min(1, state.smoothBass);
+    const mid = Math.min(1, state.smoothMid);
+    const high = Math.min(1, state.smoothHigh);
+    bandBassBar.style.width = (bass * 100) + '%';
+    bandMidBar.style.width = (mid * 100) + '%';
+    bandHighBar.style.width = (high * 100) + '%';
+    bandBassVal.textContent = Math.round(bass * 100);
+    bandMidVal.textContent = Math.round(mid * 100);
+    bandHighVal.textContent = Math.round(high * 100);
+  }
+
+  // ─── Manual BPM Input ─────────────────────────────────────────────
+  const bpmInput = document.getElementById('bpm-input');
+  const bpmValue = document.getElementById('bpm-value');
+  let manualBpm = 0;
+
+  function updateBpmVisibility() {
+    const hasSource = !!state.source;
+    bpmInput.classList.toggle('hidden', hasSource);
+    bpmValue.classList.toggle('hidden', !hasSource && manualBpm > 0);
+  }
+
+  bpmInput.addEventListener('input', () => {
+    const val = parseInt(bpmInput.value, 10);
+    if (val >= 40 && val <= 300) {
+      manualBpm = val;
+      state.bpm = val;
+      bpmValue.textContent = val;
+    } else if (!bpmInput.value) {
+      manualBpm = 0;
+      bpmValue.textContent = '--';
+    }
+    updateBpmVisibility();
+  });
 
   // ─── Recording ─────────────────────────────────────────────────────
   const btnRecord = document.getElementById('btn-record');
@@ -1160,6 +1211,7 @@
     }
 
     updateSmoothBands();
+    updateBandDisplay();
 
     // Fade previous frame (mode-specific fade rates)
     const fadeRates = {
@@ -1197,13 +1249,24 @@
     for (let i = 0; i < state.timeData.length; i++) {
       state.timeData[i] = 128 + Math.sin(state.time * 6 + i * 0.02) * 40;
     }
-    // Fake beat with more variation
-    const beatPhase = Math.sin(state.time * 3);
-    if (beatPhase > 0.95 && performance.now() - state.lastBeat > 300) {
-      state.beatEnergy = 1.0;
-      state.chromaticAberration = 1.0;
-      state.bloomIntensity = 1.0;
-      state.lastBeat = performance.now();
+    // Beat generation: use manual BPM if set, otherwise fake beats
+    const now = performance.now();
+    if (manualBpm > 0) {
+      const beatInterval = 60000 / manualBpm;
+      if (now - state.lastBeat > beatInterval) {
+        state.beatEnergy = 1.0;
+        state.chromaticAberration = 1.0;
+        state.bloomIntensity = 1.0;
+        state.lastBeat = now;
+      }
+    } else {
+      const beatPhase = Math.sin(state.time * 3);
+      if (beatPhase > 0.95 && now - state.lastBeat > 300) {
+        state.beatEnergy = 1.0;
+        state.chromaticAberration = 1.0;
+        state.bloomIntensity = 1.0;
+        state.lastBeat = now;
+      }
     }
     state.beatEnergy *= 0.92;
     state.chromaticAberration *= 0.88;
